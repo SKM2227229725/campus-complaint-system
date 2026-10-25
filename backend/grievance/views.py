@@ -6,6 +6,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from django.shortcuts import get_object_or_404
 from .models import *
 from .serializers import *
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 from . import services
 
 def audit(r, action, cid):
@@ -15,11 +16,13 @@ def audit(r, action, cid):
 class RegisterView(APIView):
     permission_classes = [permissions.AllowAny]; authentication_classes = []
     throttle_classes = [ScopedRateThrottle]; throttle_scope = "register"
+    @extend_schema(request=RegisterSerializer, responses={201: UserSerializer})
     def post(self, r):
         s = RegisterSerializer(data=r.data); s.is_valid(raise_exception=True); u = s.save()
         return Response(UserSerializer(u).data, status=201)
 
 class MeView(APIView):
+    @extend_schema(responses=UserSerializer)
     def get(self, r): return Response(UserSerializer(r.user).data)
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -29,6 +32,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
 class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     serializer_class = ComplaintSerializer
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False): return Complaint.objects.none()
         qs = services.visible_complaints(self.request.user)
         s = self.request.query_params.get("status")
         return qs.filter(status=s) if s else qs
@@ -36,15 +40,18 @@ class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         resp = super().retrieve(r, *a, **k)
         if resp.data.get("is_confidential"): audit(r, "confidential_read", resp.data["id"])
         return resp
+    @extend_schema(parameters=[OpenApiParameter("status", str, description="Filter by status")])
     def list(self, r, *a, **k):
         resp = super().list(r, *a, **k)
         for item in resp.data.get("results", []):
             if item["is_confidential"]: audit(r, "confidential_read", item["id"])
         return resp
+    @extend_schema(request=ComplaintInputSerializer, responses={201: ComplaintSerializer})
     def create(self, r):
         s = ComplaintInputSerializer(data=r.data); s.is_valid(raise_exception=True)
         c, _ = services.submit(dict(s.validated_data), reporter=r.user)
         return Response(ComplaintSerializer(c).data, status=201)
+    @extend_schema(request=StatusChangeSerializer, responses=ComplaintSerializer)
     @action(detail=True, methods=["post"])
     def status(self, r, pk=None):
         c = self.get_object(); to = r.data.get("status", ""); note = r.data.get("note", "")
@@ -54,6 +61,7 @@ class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         try: services.change_status(c, to, r.user, note)
         except ValueError as e: return Response({"detail": str(e)}, status=400)
         return Response(ComplaintSerializer(c).data)
+    @extend_schema(request=AssignRequestSerializer, responses=ComplaintSerializer)
     @action(detail=True, methods=["post"])
     def assign(self, r, pk=None):
         c = self.get_object()
@@ -64,6 +72,7 @@ class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         c.assigned_officer, c.assigned_department = officer, officer.department; c.save()
         if c.status in ("submitted","awaiting_review"): services.change_status(c, "assigned", r.user, "Manually assigned")
         return Response(ComplaintSerializer(c).data)
+    @extend_schema(request=CommentRequestSerializer, responses={201: None})
     @action(detail=True, methods=["post"])
     def comments(self, r, pk=None):
         c = self.get_object()
@@ -74,6 +83,7 @@ class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
 class PublicSubmitView(APIView):
     permission_classes = [permissions.AllowAny]; authentication_classes = []
     throttle_classes = [ScopedRateThrottle]; throttle_scope = "public_submit"
+    @extend_schema(request=ComplaintInputSerializer, responses={201: None})
     def post(self, r):
         s = ComplaintInputSerializer(data=r.data); s.is_valid(raise_exception=True)
         if s.validated_data["category"].is_confidential:
@@ -85,6 +95,7 @@ class PublicSubmitView(APIView):
 class PublicTrackView(APIView):
     permission_classes = [permissions.AllowAny]; authentication_classes = []
     throttle_classes = [ScopedRateThrottle]; throttle_scope = "track"
+    @extend_schema(request=TrackRequestSerializer, responses={200: None})
     def post(self, r):
         t = r.data.get("tracking_token", "")
         c = Complaint.objects.filter(tracking_token_hash=hash_token(t)).first() if t else None

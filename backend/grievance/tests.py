@@ -1,4 +1,4 @@
-import os, importlib
+import os, importlib, json
 from datetime import timedelta
 from unittest import mock
 from django.core.cache import cache
@@ -60,6 +60,7 @@ class Tests(APITestCase):
         self.client.force_authenticate(None)
         self.client.post("/api/v1/auth/register", {"username": "n", "password": "longpass123", "role": "sysadmin"})
         self.assertEqual(User.objects.get(username="n").role, "student")
+
     def test_grant_gives_access_and_audit_row(self):
         cid = self.post(self.s1, self.conf).data["id"]
         self.client.force_authenticate(self.dean)
@@ -106,3 +107,11 @@ class Tests(APITestCase):
             self.assertEqual((d["ENGINE"], d["NAME"], d["USER"], d["HOST"]), ("django.db.backends.postgresql", "db1", "u1", "h1"))
         finally:
             importlib.reload(s)
+
+    def test_docs_and_schema(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get("/api/docs/").status_code, 200)
+        r = self.client.get("/api/schema/?format=json"); self.assertEqual(r.status_code, 200)
+        paths = json.loads(r.content)["paths"]
+        for p in ("/api/v1/complaints/", "/api/v1/public/track", "/api/v1/complaints/{id}/assign/", "/api/v1/auth/login"):
+            self.assertIn(p, paths)
