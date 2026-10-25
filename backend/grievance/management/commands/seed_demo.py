@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from apps.complaints.models import User, Department, Category, Location
+from grievance.models import User, Department, Category, Location
 
 class Command(BaseCommand):
     help = "Seed demo data (local development only)"

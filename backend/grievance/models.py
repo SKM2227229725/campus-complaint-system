@@ -83,3 +83,20 @@ class Comment(models.Model):
     body = models.TextField()
     internal = models.BooleanField(default=False)
     at = models.DateTimeField(auto_now_add=True)
+
+class ConfidentialAccessGrant(models.Model):
+    complaint = models.ForeignKey(Complaint, on_delete=models.CASCADE, related_name="grants")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="confidential_grants")
+    granted_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    reason = models.TextField(blank=True)
+    active = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta: unique_together = [("complaint", "user")]
+
+class AuditLog(models.Model):
+    action = models.CharField(max_length=40, db_index=True)
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
+    complaint_id = models.PositiveIntegerField(null=True, blank=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    at = models.DateTimeField(auto_now_add=True)

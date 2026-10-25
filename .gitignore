@@ -22,3 +22,4 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+test_output.txt

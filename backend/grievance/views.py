@@ -8,6 +8,10 @@ from .models import *
 from .serializers import *
 from . import services
 
+def audit(r, action, cid):
+    AuditLog.objects.create(action=action, user=r.user if r.user.is_authenticated else None,
+                            complaint_id=cid, ip=r.META.get("REMOTE_ADDR"))
+
 class RegisterView(APIView):
     permission_classes = [permissions.AllowAny]; authentication_classes = []
     throttle_classes = [ScopedRateThrottle]; throttle_scope = "register"
@@ -28,6 +32,15 @@ class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         qs = services.visible_complaints(self.request.user)
         s = self.request.query_params.get("status")
         return qs.filter(status=s) if s else qs
+    def retrieve(self, r, *a, **k):
+        resp = super().retrieve(r, *a, **k)
+        if resp.data.get("is_confidential"): audit(r, "confidential_read", resp.data["id"])
+        return resp
+    def list(self, r, *a, **k):
+        resp = super().list(r, *a, **k)
+        for item in resp.data.get("results", []):
+            if item["is_confidential"]: audit(r, "confidential_read", item["id"])
+        return resp
     def create(self, r):
         s = ComplaintInputSerializer(data=r.data); s.is_valid(raise_exception=True)
         c, _ = services.submit(dict(s.validated_data), reporter=r.user)
@@ -46,6 +59,8 @@ class ComplaintViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         c = self.get_object()
         if r.user.role not in {"hod","dean","director","chief_warden","officer"}: return Response({"detail": "Not allowed"}, status=403)
         officer = get_object_or_404(User, pk=r.data.get("officer"), role__in=STAFF_ROLES)
+        if r.user.role in {"officer", "hod"} and (not r.user.department_id or officer.department_id != r.user.department_id):
+            return Response({"detail": "You can only assign within your own department"}, status=403)
         c.assigned_officer, c.assigned_department = officer, officer.department; c.save()
         if c.status in ("submitted","awaiting_review"): services.change_status(c, "assigned", r.user, "Manually assigned")
         return Response(ComplaintSerializer(c).data)
@@ -61,6 +76,8 @@ class PublicSubmitView(APIView):
     throttle_classes = [ScopedRateThrottle]; throttle_scope = "public_submit"
     def post(self, r):
         s = ComplaintInputSerializer(data=r.data); s.is_valid(raise_exception=True)
+        if s.validated_data["category"].is_confidential:
+            return Response({"detail": "Confidential complaints require identified submission"}, status=400)
         c, token = services.submit(dict(s.validated_data), anonymous=True)
         return Response({"reference_no": c.reference_no, "tracking_token": token,
             "notice": "Save this token now; it cannot be shown again."}, status=201)

@@ -1,3 +1,8 @@
+import os, importlib
+from datetime import timedelta
+from unittest import mock
+from django.core.cache import cache
+from django.utils import timezone
 from rest_framework.test import APITestCase
 from .models import *
 
@@ -11,6 +16,7 @@ class Tests(APITestCase):
         self.s1, self.s2 = mk("s1"), mk("s2")
         self.off = mk("off", role="officer", department=self.cse); self.hod = mk("hod", role="hod", department=self.cse)
         self.dean = mk("dean", role="dean", department=self.wel); self.admin = mk("adm", role="sysadmin")
+        cache.clear()
     def post(self, user, cat, **kw):
         self.client.force_authenticate(user)
         return self.client.post("/api/v1/complaints/", {"category": cat.pk, "title": "t", "description": "d", **kw}, format="json")
@@ -54,3 +60,49 @@ class Tests(APITestCase):
         self.client.force_authenticate(None)
         self.client.post("/api/v1/auth/register", {"username": "n", "password": "longpass123", "role": "sysadmin"})
         self.assertEqual(User.objects.get(username="n").role, "student")
+    def test_grant_gives_access_and_audit_row(self):
+        cid = self.post(self.s1, self.conf).data["id"]
+        self.client.force_authenticate(self.dean)
+        self.assertEqual(self.client.get(f"/api/v1/complaints/{cid}/").status_code, 404)
+        g = ConfidentialAccessGrant.objects.create(complaint_id=cid, user=self.dean, granted_by=self.admin)
+        self.assertEqual(self.client.get(f"/api/v1/complaints/{cid}/").status_code, 200)
+        a = AuditLog.objects.get(action="confidential_read", user=self.dean)
+        self.assertEqual(a.complaint_id, cid)
+        g.active = False; g.save()
+        self.assertEqual(self.client.get(f"/api/v1/complaints/{cid}/").status_code, 404)
+    def test_assign_scope(self):
+        other = Department.objects.create(name="ECE")
+        off2 = User.objects.create_user("off2", password="x"*10, role="officer", department=other)
+        cid = self.post(self.s1, self.lab, extra_data={"lab": "L1"}).data["id"]
+        url = f"/api/v1/complaints/{cid}/assign/"
+        for u in (self.off, self.hod):
+            self.client.force_authenticate(u)
+            self.assertEqual(self.client.post(url, {"officer": off2.pk}).status_code, 403, u.role)
+            self.assertEqual(self.client.post(url, {"officer": self.off.pk}).status_code, 200)
+        self.client.force_authenticate(self.dean)
+        self.assertEqual(self.client.post(url, {"officer": off2.pk}).status_code, 200)
+    def test_anonymous_confidential_rejected(self):
+        self.client.force_authenticate(None)
+        r = self.client.post("/api/v1/public/complaints", {"category": self.conf.pk, "title": "t", "description": "d"}, format="json")
+        self.assertEqual(r.status_code, 400); self.assertEqual(Complaint.objects.count(), 0)
+    def test_track_throttle(self):
+        codes = [self.client.post("/api/v1/public/track", {"tracking_token": "x"}, format="json").status_code for _ in range(11)]
+        self.assertEqual(codes[:10], [404]*10); self.assertEqual(codes[10], 429)
+    def test_reopen_window(self):
+        cid = self.post(self.s1, self.lab, extra_data={"lab": "L1"}).data["id"]
+        url = f"/api/v1/complaints/{cid}/status/"
+        self.client.force_authenticate(self.off)
+        self.client.post(url, {"status": "in_progress"}); self.client.post(url, {"status": "resolved"})
+        StatusHistory.objects.filter(complaint_id=cid, to_status="resolved").update(at=timezone.now() - timedelta(days=8))
+        self.client.force_authenticate(self.s1)
+        r = self.client.post(url, {"status": "reopened"})
+        self.assertEqual(r.status_code, 400); self.assertIn("expired", r.data["detail"])
+    def test_postgres_env_is_read(self):
+        import config.settings as s
+        env = {"POSTGRES_DB": "db1", "POSTGRES_USER": "u1", "POSTGRES_PASSWORD": "p1", "POSTGRES_HOST": "h1"}
+        try:
+            with mock.patch.dict(os.environ, env):
+                d = importlib.reload(s).DATABASES["default"]
+            self.assertEqual((d["ENGINE"], d["NAME"], d["USER"], d["HOST"]), ("django.db.backends.postgresql", "db1", "u1", "h1"))
+        finally:
+            importlib.reload(s)
