@@ -5,3 +5,4 @@ drf-spectacular[sidecar]>=0.27
 psycopg[binary]>=3.1
 gunicorn>=22.0
 whitenoise>=6.6
+Pillow>=10.0

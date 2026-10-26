@@ -66,6 +66,12 @@ class Complaint(models.Model):
     assigned_department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL)
     assigned_officer = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned")
     resolution_notes = models.TextField(blank=True)
+    
+    # NAYE FIELDS
+    severity = models.CharField(max_length=10, choices=[('LOW','Low'), ('MEDIUM','Medium'), ('HIGH','High'), ('CRITICAL','Critical')], default='LOW')
+    duplicate_of = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='duplicates')
+    attachment = models.ImageField(upload_to='complaints/', null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta: ordering = ["-created_at"]; indexes = [models.Index(fields=["status","assigned_department"])]

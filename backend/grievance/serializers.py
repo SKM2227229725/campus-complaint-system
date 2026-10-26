@@ -2,18 +2,39 @@ from rest_framework import serializers
 from .models import *
 
 class UserSerializer(serializers.ModelSerializer):
-    class Meta: model = User; fields = ["id","username","email","role","department"]
+    class Meta: 
+        model = User
+        fields = ["id","username","email","role","department"]
 
 class RegisterSerializer(serializers.ModelSerializer):
-    class Meta: model = User; fields = ["username","email","password"]; extra_kwargs = {"password":{"write_only":True,"min_length":8}}
-    def create(self, v):
+    class Meta: 
+        model = User
+        fields = ["username","email","password"]
+        extra_kwargs = {"password":{"write_only":True,"min_length":8}}
+        
+    def create(self, v):  
+        # role is always student; staff are created by admins
         return User.objects.create_user(role="student", **v)
 
 class CategorySerializer(serializers.ModelSerializer):
-    class Meta: model = Category; fields = ["id","name","parent","is_confidential","form_schema"]
+    class Meta: 
+        model = Category
+        fields = ["id","name","parent","is_confidential","form_schema"]
 
 class ComplaintInputSerializer(serializers.ModelSerializer):
-    class Meta: model = Complaint; fields = ["category","location","title","description","original_language","incident_at","affected_count","extra_data"]
+    # Naya field image ke liye
+    attachment = serializers.ImageField(required=False, allow_null=True)
+    
+    class Meta:
+        model = Complaint
+        fields = ["category", "location", "title", "description", "original_language", "incident_at", "affected_count", "extra_data", "attachment"]
+        extra_kwargs = {
+            "location": {"required": False, "allow_null": True},
+            "incident_at": {"required": False, "allow_null": True},
+            "affected_count": {"required": False, "allow_null": True},
+            "extra_data": {"required": False, "default": dict}
+        }
+        
     def validate(self, a):
         extra = a.get("extra_data") or {}
         for f in a["category"].form_schema.get("fields", []):
@@ -22,25 +43,31 @@ class ComplaintInputSerializer(serializers.ModelSerializer):
         return a
 
 class HistorySerializer(serializers.ModelSerializer):
-    class Meta: model = StatusHistory; fields = ["from_status","to_status","note","at"]
+    class Meta: 
+        model = StatusHistory
+        fields = ["from_status","to_status","note","at"]
 
 class ComplaintSerializer(serializers.ModelSerializer):
     history = HistorySerializer(many=True, read_only=True)
     category_name = serializers.CharField(source="category.name", read_only=True)
     assigned_officer_username = serializers.CharField(source="assigned_officer.username", read_only=True, allow_null=True)
+    
     class Meta:
         model = Complaint
         fields = ["id","reference_no","is_anonymous","category","category_name","location","title","description","original_language",
                   "incident_at","affected_count","extra_data","is_confidential","status","assigned_department",
-                  "assigned_officer","assigned_officer_username","resolution_notes","created_at","history"]
+                  "assigned_officer","assigned_officer_username","resolution_notes","created_at","history","attachment"]
 
 class TrackRequestSerializer(serializers.Serializer):
     tracking_token = serializers.CharField()
+
 class StatusChangeSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Status.choices)
     note = serializers.CharField(required=False, allow_blank=True)
+
 class AssignRequestSerializer(serializers.Serializer):
     officer = serializers.IntegerField()
+
 class CommentRequestSerializer(serializers.Serializer):
     body = serializers.CharField()
     internal = serializers.BooleanField(required=False)
